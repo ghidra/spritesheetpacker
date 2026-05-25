@@ -1,0 +1,18 @@
+# Build output
+/build/
+/spritesheet
+
+# Object / dependency files (in case of in-tree builds)
+*.o
+*.d
+
+# Dear ImGui runtime layout (per-machine window state)
+imgui.ini
+
+# Personal Claude Code settings (keep shared .claude/settings.json if added)
+.claude/settings.local.json
+
+# Editor / OS cruft
+*.swp
+*~
+.DS_Store
