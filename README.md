@@ -32,13 +32,21 @@ and lets you hand-place individual frames when you want manual control.
 - **SDL2** (with `sdl2-config` on `PATH`).
 - **nlohmann/json** development headers (e.g. `/usr/include/nlohmann/json.hpp`).
 
-Vendored under `third_party/` (no action needed):
+Under `third_party/`:
 
-- Dear ImGui (+ SDL2 / SDL_Renderer2 backends)
-- stb_image / stb_image_write
-- ImGuiFileDialog
+- Dear ImGui (+ SDL2 / SDL_Renderer2 backends) — git submodule, pinned to `v1.91.6`
+- ImGuiFileDialog — git submodule
+- stb_image / stb_image_write — vendored directly
 
 ## Build & run
+
+This repo uses git submodules for ImGui and ImGuiFileDialog. After cloning:
+
+```sh
+git clone --recurse-submodules <repo-url>
+# or, if already cloned:
+git submodule update --init
+```
 
 ```sh
 make            # produces ./spritesheet
