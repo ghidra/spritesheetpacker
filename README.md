@@ -23,7 +23,11 @@ and lets you hand-place individual frames when you want manual control.
   - `Tight` — round content up to the base unit.
   - `Manual` — an explicit size (clamped to at least the content extent).
   - Optional power-of-two rounding on top.
-- Export a packed PNG plus a JSON manifest of frame rectangles.
+- Export a packed PNG plus a JSON manifest of sprite pieces (or just the
+  manifest when only the layout changed).
+- **Render passes**: pack/edit one base pass (e.g. diffuse `_D`) and export matching
+  sheets for sibling passes (`_N`, `_P`, …) that share the exact same layout — one
+  project, one manifest, no duplicated arranging.
 - Recently-opened project list and native-feeling in-app file dialogs.
 
 ## Dependencies
@@ -58,7 +62,8 @@ make clean
 ## Usage
 
 - **File**: New (Ctrl+N), Open (Ctrl+O), Open Recent, Save (Ctrl+S),
-  Save As (Ctrl+Shift+S), Export PNG + Manifest (Ctrl+E), Quit (Ctrl+Q).
+  Save As (Ctrl+Shift+S), Export PNG + Manifest (Ctrl+E),
+  Export Manifest Only (Ctrl+Shift+E), Quit (Ctrl+Q).
 - **Sprite**: Add PNG (Ctrl+A), Auto-pack all (Ctrl+P).
 - **Canvas**: drag from the Sprites panel to place; drag any placed frame to move
   it on its grid; click to select. The bright outline marks the exact exported
@@ -92,21 +97,54 @@ The editor reads/writes a JSON project (conventionally `*.spritesheet.json`):
 `src` paths are stored relative to the project file. Single-frame sprites use
 `x`/`y`; multi-frame sprites use a `frames` array of `[x, y]` per frame.
 
+## Render passes
+
+For multi-pass render output (diffuse / normal / position, etc.), set **Passes**
+in the project settings to a comma-separated suffix list, e.g. `_D,_N,_P`. The
+first entry is the **base** pass: its images are what you load, pack, and edit
+(sprite `src` paths point at the `_D` files). On export the layout is computed
+once, then for each pass the matching image is loaded (by swapping the base
+suffix in each filename) and composited at the identical positions:
+
+```
+sprite src   beachsand_D.png  ->  beachsand_N.png, beachsand_P.png
+output       spritesheet.png  ->  spritesheet_D.png, _N.png, _P.png
+```
+
+A missing or wrong-sized variant for a pass is logged and left transparent
+rather than aborting the export. Leave **Passes** empty for a normal single
+sheet. The manifest is written once (the layout is shared) and lists every
+pass image in its `images` array.
+
 ## Exported manifest
 
-Export writes the packed PNG and a manifest mapping each frame to its rectangle.
-Single-frame sprites use their bare `id`; multi-frame frames are keyed `id#0`,
-`id#1`, …:
+Export writes the packed PNG(s) and a manifest wrapped in a single named "kit"
+keyed by the output file stem. `images` lists every packed sheet (one per pass,
+or just one entry without passes) at full atlas dimensions; `pieces` is keyed
+by sid (single-frame sprites use the bare `id`, multi-frame frames are keyed
+`id_0`, `id_1`, …) and each piece carries `rect` (`[x, y, w, h]` in atlas
+pixels) plus `size` (the piece's footprint in base-unit cells:
+`[w/baseUnit, h/baseUnit]`). `spriteWidth`/`spriteHeight` on each image mirror
+`baseUnit` and act only as a legacy fallback for consumers that don't read
+`rect`.
 
 ```json
 {
-  "version": 1,
-  "baseUnit": 32,
-  "sheetWidth": 960,
-  "sheetHeight": 448,
-  "sprites": {
-    "coin":   { "x": 0,  "y": 0, "w": 16, "h": 16 },
-    "walk#0": { "x": 16, "y": 0, "w": 16, "h": 16 }
+  "spritesheet": {
+    "images": [
+      {"path": "spritesheet_D.png", "width": 960, "height": 448, "spriteWidth": 32, "spriteHeight": 32},
+      {"path": "spritesheet_N.png", "width": 960, "height": 448, "spriteWidth": 32, "spriteHeight": 32}
+    ],
+    "pieces": {
+      "coin": {
+        "rect": [0, 0, 32, 32],
+        "size": [1, 1]
+      },
+      "beachsand_0": {
+        "rect": [0, 0, 160, 128],
+        "size": [5, 4]
+      }
+    }
   }
 }
 ```

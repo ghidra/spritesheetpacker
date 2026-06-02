@@ -56,6 +56,9 @@ void draw_menu(App& a) {
         if (ImGui::MenuItem("Export PNG + Manifest", "Ctrl+E")) {
             app::export_all(a);
         }
+        if (ImGui::MenuItem("Export Manifest Only", "Ctrl+Shift+E")) {
+            app::export_manifest(a);
+        }
         ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Ctrl+Q")) a.quit_requested = true;
         ImGui::EndMenu();
@@ -136,6 +139,9 @@ void draw_sprite_list(App& a) {
     if (ImGui::Button("Auto-pack")) app::auto_pack(a);
     ImGui::SameLine();
     if (ImGui::Button("Export")) app::export_all(a);
+    ImGui::SameLine();
+    if (ImGui::Button("Manifest")) app::export_manifest(a);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Write only the manifest JSON (skip PNGs)");
 
     ImGui::Separator();
     ImGui::Text("%zu sprites · sheet %dx%d", a.project.sprites.size(), a.project.sheet_w, a.project.sheet_h);
@@ -258,6 +264,33 @@ void draw_inspector(App& a) {
             a.project.manifest_rel = buf_mf;
             a.project_dirty = true;
         }
+
+        // Render passes: comma-separated suffixes; first is the base (edited) pass.
+        std::string joined;
+        for (size_t i = 0; i < a.project.passes.size(); ++i)
+            joined += (i ? "," : "") + a.project.passes[i];
+        char buf_pass[256]; std::snprintf(buf_pass, sizeof(buf_pass), "%s", joined.c_str());
+        if (ImGui::InputText("Passes", buf_pass, sizeof(buf_pass))) {
+            a.project.passes.clear();
+            std::string tok;
+            for (const char* c = buf_pass; ; ++c) {
+                if (*c == ',' || *c == '\0') {
+                    size_t b = tok.find_first_not_of(" \t");
+                    size_t e = tok.find_last_not_of(" \t");
+                    if (b != std::string::npos) a.project.passes.push_back(tok.substr(b, e - b + 1));
+                    tok.clear();
+                    if (*c == '\0') break;
+                } else {
+                    tok += *c;
+                }
+            }
+            a.project_dirty = true;
+        }
+        if (a.project.passes.empty())
+            ImGui::TextDisabled("single sheet; e.g. _D,_N,_P to export matching passes");
+        else
+            ImGui::TextDisabled("base pass: %s  (edited/packed); export writes one sheet per pass",
+                                a.project.passes.front().c_str());
         return;
     }
     Sprite& s = a.project.sprites[a.selected_sprite];
@@ -513,7 +546,8 @@ void process_shortcuts(App& a) {
         else a.open_save_as_modal = true;
     }
     if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_S, false)) a.open_save_as_modal = true;
-    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_E, false)) app::export_all(a);
+    if (ctrl && !shift && ImGui::IsKeyPressed(ImGuiKey_E, false)) app::export_all(a);
+    if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_E, false)) app::export_manifest(a);
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) a.open_add_sprite_modal = true;
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P, false)) app::auto_pack(a);
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Q, false)) a.quit_requested = true;

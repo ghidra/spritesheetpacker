@@ -70,6 +70,10 @@ bool auto_pack(App& a);
 // Export PNG + manifest using paths from project, resolved relative to project_path.
 bool export_all(App& a);
 
+// Write just the manifest (skip the PNG passes). Useful when sheet PNGs are
+// already up to date and only the JSON layout needs refreshing.
+bool export_manifest(App& a);
+
 // Refresh sheet dims based on currently placed sprites (no packing).
 void recompute_sheet_dims(App& a);
 

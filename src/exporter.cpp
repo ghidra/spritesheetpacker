@@ -29,15 +29,21 @@ static inline void blend_pixel(unsigned char* dst, const unsigned char* src) {
     dst[3] = (unsigned char)out_a;
 }
 
-void export_png(const Project& project, const std::string& abs_png_path) {
+void export_png(const Project& project, const std::string& abs_png_path,
+                const std::vector<const std::vector<unsigned char>*>* pixel_override) {
     int W = project.sheet_w;
     int H = project.sheet_h > 0 ? project.sheet_h : 1;
     if (W <= 0) throw std::runtime_error("sheet width is 0 — nothing to export");
 
     std::vector<unsigned char> buf((size_t)W * (size_t)H * 4, 0);
 
-    for (const Sprite& s : project.sprites) {
-        if (s.pixels.empty()) continue;
+    for (size_t si = 0; si < project.sprites.size(); ++si) {
+        const Sprite& s = project.sprites[si];
+        const std::vector<unsigned char>* pxp = &s.pixels;
+        if (pixel_override)
+            pxp = si < pixel_override->size() ? (*pixel_override)[si] : nullptr;
+        if (!pxp || pxp->empty()) continue;
+        const std::vector<unsigned char>& pixels = *pxp;
         int fw = s.frame_w(), fh = s.frame_h();
         for (int i = 0; i < s.frame_count(); ++i) {
             const FramePlacement& f = s.frames[i];
@@ -48,7 +54,7 @@ void export_png(const Project& project, const std::string& abs_png_path) {
             int sx = s.frame_src_x(i), sy = s.frame_src_y(i);
             for (int row = 0; row < fh; ++row) {
                 const unsigned char* src_row =
-                    &s.pixels[(((size_t)(sy + row) * (size_t)s.w) + sx) * 4];
+                    &pixels[(((size_t)(sy + row) * (size_t)s.w) + sx) * 4];
                 unsigned char* dst_row = &buf[((size_t)(f.y + row) * (size_t)W + f.x) * 4];
                 for (int col = 0; col < fw; ++col)
                     blend_pixel(dst_row + col * 4, src_row + col * 4);

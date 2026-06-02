@@ -208,19 +208,70 @@ bool export_all(App& a) {
         log(a, AppMessage::Level::Error, "save the project first");
         return false;
     }
-    // Make sure dims are up to date
     recompute_sheet_dims(a);
 
-    std::string png = project::resolve_relative(a.project_path, a.project.output_rel);
-    std::string mf  = project::resolve_relative(a.project_path, a.project.manifest_rel);
+    const std::string& base = a.project.passes.empty() ? std::string() : a.project.passes.front();
+
+    // One PNG per pass (or a single pass with output as-is when none defined).
+    std::vector<std::string> passes = a.project.passes;
+    if (passes.empty()) passes.push_back("");  // sentinel: write output_rel unchanged
+
     try {
-        exporter::export_png(a.project, png);
+        for (const std::string& pass : passes) {
+            // Gather this pass's pixels per sprite; base pass reuses loaded pixels.
+            std::vector<std::vector<unsigned char>> storage(a.project.sprites.size());
+            std::vector<const std::vector<unsigned char>*> px(a.project.sprites.size(), nullptr);
+            for (size_t i = 0; i < a.project.sprites.size(); ++i) {
+                Sprite& s = a.project.sprites[i];
+                if (pass.empty() || pass == base) {
+                    px[i] = &s.pixels;
+                    continue;
+                }
+                std::string vsrc = project::source_for_pass(s.src, base, pass);
+                std::string abs = project::resolve_relative(a.project_path, vsrc);
+                Sprite tmp;
+                if (sprite_load_image(tmp, abs, nullptr) && tmp.w == s.w && tmp.h == s.h) {
+                    storage[i] = std::move(tmp.pixels);
+                    px[i] = &storage[i];
+                } else {
+                    log(a, AppMessage::Level::Warn,
+                        s.id + ": pass " + pass + " image missing or wrong size (" +
+                        vsrc + ") — left transparent");
+                }
+            }
+
+            std::string out_rel = pass.empty() ? a.project.output_rel
+                                               : project::output_for_pass(a.project.output_rel, pass);
+            std::string png = project::resolve_relative(a.project_path, out_rel);
+            exporter::export_png(a.project, png, &px);
+            log(a, AppMessage::Level::Info, "exported " + png);
+        }
+
+        // Layout is identical across passes — manifest written once.
+        std::string mf = project::resolve_relative(a.project_path, a.project.manifest_rel);
         project::save_manifest(mf, a.project);
+        log(a, AppMessage::Level::Info, "wrote manifest " + mf);
     } catch (const std::exception& e) {
         log(a, AppMessage::Level::Error, std::string("export failed: ") + e.what());
         return false;
     }
-    log(a, AppMessage::Level::Info, "exported " + png + " + " + mf);
+    return true;
+}
+
+bool export_manifest(App& a) {
+    if (a.project_path.empty()) {
+        log(a, AppMessage::Level::Error, "save the project first");
+        return false;
+    }
+    recompute_sheet_dims(a);
+    try {
+        std::string mf = project::resolve_relative(a.project_path, a.project.manifest_rel);
+        project::save_manifest(mf, a.project);
+        log(a, AppMessage::Level::Info, "wrote manifest " + mf);
+    } catch (const std::exception& e) {
+        log(a, AppMessage::Level::Error, std::string("manifest export failed: ") + e.what());
+        return false;
+    }
     return true;
 }
 

@@ -88,6 +88,22 @@ void fit_sheet_dims(Project& p) {
     p.sheet_h = h;
 }
 
+std::string output_for_pass(const std::string& output, const std::string& pass) {
+    fs::path p(output);
+    return (p.parent_path() / (p.stem().string() + pass + p.extension().string()))
+        .lexically_normal().string();
+}
+
+std::string source_for_pass(const std::string& src, const std::string& base, const std::string& pass) {
+    fs::path p(src);
+    std::string stem = p.stem().string();
+    if (!base.empty() && stem.size() >= base.size() &&
+        stem.compare(stem.size() - base.size(), base.size(), base) == 0)
+        stem.erase(stem.size() - base.size());
+    stem += pass;
+    return (p.parent_path() / (stem + p.extension().string())).lexically_normal().string();
+}
+
 std::string resolve_relative(const std::string& project_path, const std::string& target) {
     fs::path t(target);
     if (t.is_absolute()) return t.lexically_normal().string();
@@ -128,6 +144,9 @@ Project load(const std::string& path) {
     p.height_fit = parse_fit(j.value("heightFit", std::string("shared")));
     p.manual_width = j.value("manualWidth", 0);
     p.manual_height = j.value("manualHeight", 0);
+    if (j.contains("passes") && j["passes"].is_array())
+        for (const auto& e : j["passes"])
+            if (e.is_string()) p.passes.push_back(e.get<std::string>());
 
     if (j.contains("sprites") && j["sprites"].is_array()) {
         for (const auto& e : j["sprites"]) {
@@ -170,6 +189,7 @@ void save(const std::string& path, const Project& project) {
     j["heightFit"] = fit_str(project.height_fit);
     if (project.width_fit == SheetFit::Manual) j["manualWidth"] = project.manual_width;
     if (project.height_fit == SheetFit::Manual) j["manualHeight"] = project.manual_height;
+    if (!project.passes.empty()) j["passes"] = project.passes;
     j["sprites"] = json::array();
     for (const Sprite& s : project.sprites) {
         json e;
@@ -197,29 +217,72 @@ void save(const std::string& path, const Project& project) {
 }
 
 void save_manifest(const std::string& path, const Project& project) {
-    json j;
-    j["version"] = 1;
-    j["baseUnit"] = project.base_unit;
-    j["sheetWidth"] = project.sheet_w;
-    j["sheetHeight"] = project.sheet_h;
-    j["sprites"] = json::object();
+    auto rel_to_manifest = [&](const std::string& rel_path) -> std::string {
+        fs::path manifest_dir = fs::path(project.manifest_rel).parent_path();
+        fs::path target(rel_path);
+        fs::path rel = manifest_dir.empty() ? target : target.lexically_relative(manifest_dir);
+        if (rel.empty()) rel = target.filename();
+        return rel.generic_string();
+    };
+
+    std::vector<std::string> image_paths;
+    if (project.passes.empty()) {
+        image_paths.push_back(rel_to_manifest(project.output_rel));
+    } else {
+        for (const std::string& p : project.passes)
+            image_paths.push_back(rel_to_manifest(output_for_pass(project.output_rel, p)));
+    }
+
+    struct Piece { std::string id; int x, y, w, h, cols, rows; };
+    int unit = project.base_unit > 0 ? project.base_unit : 1;
+    std::vector<Piece> pieces;
     for (const Sprite& s : project.sprites) {
         int fw = s.frame_w(), fh = s.frame_h();
         for (int i = 0; i < s.frame_count(); ++i) {
             const FramePlacement& f = s.frames[i];
             if (f.x < 0 || f.y < 0) continue;
-            json e;
-            e["x"] = f.x;
-            e["y"] = f.y;
-            e["w"] = fw;
-            e["h"] = fh;
-            j["sprites"][s.frame_id(i)] = e;
+            pieces.push_back({s.frame_id(i), f.x, f.y, fw, fh, fw / unit, fh / unit});
         }
     }
+
+    std::string kit_name = fs::path(project.output_rel).stem().string();
+    if (kit_name.empty()) kit_name = "kit";
+
+    // Custom layout: kit/images/pieces pretty-printed; image entries and
+    // rect/size arrays compact on a single line. nlohmann's dump() only
+    // supports a single indent setting, hence the hand-written writer.
+    auto str = [](const std::string& s) { return json(s).dump(); };
+
     fs::create_directories(fs::path(path).parent_path());
     std::ofstream out(path);
     if (!out) throw std::runtime_error("cannot write manifest: " + path);
-    out << j.dump(2) << "\n";
+
+    out << "{\n";
+    out << "  " << str(kit_name) << ": {\n";
+
+    out << "    \"images\": [\n";
+    for (size_t i = 0; i < image_paths.size(); ++i) {
+        out << "      {\"path\": " << str(image_paths[i])
+            << ", \"width\": " << project.sheet_w
+            << ", \"height\": " << project.sheet_h
+            << ", \"spriteWidth\": " << project.base_unit
+            << ", \"spriteHeight\": " << project.base_unit
+            << "}" << (i + 1 < image_paths.size() ? "," : "") << "\n";
+    }
+    out << "    ],\n";
+
+    out << "    \"pieces\": {\n";
+    for (size_t i = 0; i < pieces.size(); ++i) {
+        const Piece& p = pieces[i];
+        out << "      " << str(p.id) << ": {\n";
+        out << "        \"rect\": [" << p.x << ", " << p.y << ", " << p.w << ", " << p.h << "],\n";
+        out << "        \"size\": [" << p.cols << ", " << p.rows << "]\n";
+        out << "      }" << (i + 1 < pieces.size() ? "," : "") << "\n";
+    }
+    out << "    }\n";
+
+    out << "  }\n";
+    out << "}\n";
 }
 
 void hydrate(Project& project, const std::string& project_path, SDL_Renderer* renderer,

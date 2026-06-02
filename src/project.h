@@ -22,6 +22,13 @@ struct Project {
     SheetFit height_fit = SheetFit::Shared;
     int manual_width = 0;
     int manual_height = 0;
+
+    // Render-pass suffixes (e.g. "_D","_N","_P"). When non-empty, export packs
+    // one sheet per pass sharing the same layout; the first entry is the base
+    // pass whose images are loaded for display/packing and stored in sprite.src.
+    // Empty = single-pass export using sprite.src and output as-is.
+    std::vector<std::string> passes;
+
     std::vector<Sprite> sprites;
 
     // Computed after packing
@@ -36,6 +43,13 @@ namespace project {
 // is always >= the content extent). Honors `pot` by rounding up to a power of
 // two afterward.
 void fit_sheet_dims(Project& project);
+
+// Insert a pass suffix before the extension, e.g. ("./sheet.png","_N") -> "./sheet_N.png".
+std::string output_for_pass(const std::string& output, const std::string& pass);
+
+// Derive a sprite source path for `pass` by swapping the base suffix in the
+// filename stem, e.g. ("a/foo_D.png","_D","_N") -> "a/foo_N.png".
+std::string source_for_pass(const std::string& src, const std::string& base, const std::string& pass);
 
 // Resolve a project-relative path to an absolute path.
 std::string resolve_relative(const std::string& project_path, const std::string& target);

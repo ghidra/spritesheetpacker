@@ -41,9 +41,9 @@ struct Sprite {
     int frame_src_x(int i) const { return frame_col(i) * frame_w(); }
     int frame_src_y(int i) const { return frame_row(i) * frame_h(); }
 
-    // Manifest/runtime key: bare id for single-frame, id#index for multi-frame.
+    // Manifest/runtime key: bare id for single-frame, id_index for multi-frame.
     std::string frame_id(int i) const {
-        return frame_count() == 1 ? id : id + "#" + std::to_string(i);
+        return frame_count() == 1 ? id : id + "_" + std::to_string(i);
     }
 
     bool is_multi() const { return frame_count() > 1; }
