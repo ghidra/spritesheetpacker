@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include "app.h"
+#include "sizes.h"
 #include "sprite.h"
 
 #include <imgui.h>
@@ -65,7 +66,12 @@ void draw_menu(App& a) {
     }
     if (ImGui::BeginMenu("Sprite")) {
         if (ImGui::MenuItem("Add PNG...", "Ctrl+A")) a.open_add_sprite_modal = true;
+        bool has_sel = a.selected_sprite >= 0 && a.selected_sprite < (int)a.project.sprites.size();
+        if (ImGui::MenuItem("Remove selected", "Del", false, has_sel))
+            app::remove_sprite(a, a.selected_sprite);
         if (ImGui::MenuItem("Auto-pack all", "Ctrl+P")) app::auto_pack(a);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Sheet report", "Ctrl+R")) app::report_sheet(a);
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
@@ -160,7 +166,11 @@ void draw_sprite_list(App& a) {
         else
             std::snprintf(label, sizeof(label), "%s  (%dx%d) %s",
                           s.id.c_str(), s.w, s.h, status);
-        if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick))
+        float remove_w = ImGui::GetFrameHeight();
+        float row_w = ImGui::GetContentRegionAvail().x
+                      - remove_w - ImGui::GetStyle().ItemSpacing.x;
+        if (ImGui::Selectable(label, selected, ImGuiSelectableFlags_AllowDoubleClick,
+                              ImVec2(row_w, 0)))
             a.selected_sprite = i;
 
         // Drag source: drag this sprite onto the canvas
@@ -192,6 +202,10 @@ void draw_sprite_list(App& a) {
             if (ImGui::MenuItem("Remove")) to_remove = i;
             ImGui::EndPopup();
         }
+
+        ImGui::SameLine();
+        if (ImGui::SmallButton("x")) to_remove = i;
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove %s from project", s.id.c_str());
         ImGui::PopID();
     }
     if (to_remove >= 0) app::remove_sprite(a, to_remove);
@@ -253,6 +267,14 @@ void draw_inspector(App& a) {
         axis_ui("Width fit", "Width", a.project.width_fit, a.project.manual_width, a.project.sheet_w);
         axis_ui("Height fit", "Height", a.project.height_fit, a.project.manual_height, a.project.sheet_h);
         ImGui::Text("Sheet (export): %d x %d", a.project.sheet_w, a.project.sheet_h);
+        if (ImGui::Button("Snap all cells to best size", ImVec2(-1, 0))) app::snap_all_cells(a);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Grow every sprite's packing cell to the smallest tidy size\n"
+                              "that fits its art. Unplaces them all — re-pack with Ctrl+P.");
+        if (ImGui::Button("Sheet report", ImVec2(-1, 0))) app::report_sheet(a);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Audit sheet usage and whether the fit rules above are\n"
+                              "satisfiable (Ctrl+R). Results go to the Messages panel.");
 
         char buf_out[512];  std::snprintf(buf_out, sizeof(buf_out), "%s", a.project.output_rel.c_str());
         if (ImGui::InputText("Output PNG", buf_out, sizeof(buf_out))) {
@@ -285,12 +307,60 @@ void draw_inspector(App& a) {
                 }
             }
             a.project_dirty = true;
+            // Pass list changed under an active preview — drop back to base.
+            if (a.preview_pass != 0) app::set_preview_pass(a, 0);
         }
         if (a.project.passes.empty())
             ImGui::TextDisabled("single sheet; e.g. _D,_N,_P to export matching passes");
         else
             ImGui::TextDisabled("base pass: %s  (edited/packed); export writes one sheet per pass",
                                 a.project.passes.front().c_str());
+
+        // Shadow-mesh registry: name -> consumer-side path. Sprites pick the
+        // name in their `shadow` attribute; renames follow the references.
+        ImGui::Separator();
+        ImGui::TextUnformatted("Shadow meshes");
+        int mesh_remove = -1;
+        for (int i = 0; i < (int)a.project.shadow_meshes.size(); ++i) {
+            ShadowMesh& m = a.project.shadow_meshes[i];
+            ImGui::PushID(i);
+            char name_buf[128]; std::snprintf(name_buf, sizeof(name_buf), "%s", m.name.c_str());
+            ImGui::SetNextItemWidth(110.0f);
+            if (ImGui::InputText("##mesh_name", name_buf, sizeof(name_buf))) {
+                std::string old = m.name;
+                m.name = name_buf;
+                if (!old.empty())
+                    for (Sprite& sp : a.project.sprites)
+                        if (sp.shadow == old) sp.shadow = m.name;
+                a.project_dirty = true;
+            }
+            ImGui::SameLine();
+            float remove_w = ImGui::GetFrameHeight();
+            ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x
+                                    - remove_w - ImGui::GetStyle().ItemSpacing.x);
+            char path_buf[512]; std::snprintf(path_buf, sizeof(path_buf), "%s", m.path.c_str());
+            if (ImGui::InputText("##mesh_path", path_buf, sizeof(path_buf))) {
+                m.path = path_buf;
+                a.project_dirty = true;
+            }
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) mesh_remove = i;
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Remove entry (sprites referencing it keep the stale name)");
+            ImGui::PopID();
+        }
+        if (mesh_remove >= 0) {
+            a.project.shadow_meshes.erase(a.project.shadow_meshes.begin() + mesh_remove);
+            a.project_dirty = true;
+        }
+        if (ImGui::Button("Add shadow mesh")) {
+            a.project.shadow_meshes.push_back({"", ""});
+            a.project_dirty = true;
+        }
+        if (a.project.shadow_meshes.empty()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("name + mesh path; sprites reference the name");
+        }
         return;
     }
     Sprite& s = a.project.sprites[a.selected_sprite];
@@ -316,7 +386,104 @@ void draw_inspector(App& a) {
             app::recompute_sheet_dims(a);
         }
     }
-    ImGui::Text("frame size: %d x %d  (%d frames)", s.frame_w(), s.frame_h(), s.frame_count());
+    ImGui::Text("art size: %d x %d  (%d frames)", s.art_w(), s.art_h(), s.frame_count());
+
+    // Packing cell: optional margin around the art. Only sizes >= the art are
+    // offered — a cell never crops. Art is centered left/right, sits on the
+    // bottom edge, and the cell is what the manifest reports as `rect`.
+    ImGui::Separator();
+    ImGui::TextUnformatted("Packing cell");
+    auto cell_combo = [&](const char* label, int art, int cur, int& picked) {
+        bool changed = false;
+        std::vector<int> opts = sizes::ladder(a.project.base_unit, std::max(art, 1) * 4);
+        opts.erase(std::remove_if(opts.begin(), opts.end(),
+                                  [&](int v) { return v < art; }), opts.end());
+        char preview[64];
+        if (cur > art) std::snprintf(preview, sizeof(preview), "%d  (+%d)", cur, cur - art);
+        else std::snprintf(preview, sizeof(preview), "fit art (%d)", art);
+        if (ImGui::BeginCombo(label, preview)) {
+            if (ImGui::Selectable("fit art", cur <= art)) { picked = 0; changed = true; }
+            for (int v : opts) {
+                char item[64];
+                std::snprintf(item, sizeof(item), "%d  (+%d)", v, v - art);
+                if (ImGui::Selectable(item, v == cur)) { picked = v; changed = true; }
+            }
+            ImGui::EndCombo();
+        }
+        return changed;
+    };
+    int new_cw = s.frame_w(), new_ch = s.frame_h();
+    bool cell_changed = false;
+    if (cell_combo("cell width", s.art_w(), s.frame_w(), new_cw)) cell_changed = true;
+    if (cell_combo("cell height", s.art_h(), s.frame_h(), new_ch)) cell_changed = true;
+    if (cell_changed) app::set_cell(a, a.selected_sprite, new_cw, new_ch);
+
+    if (s.has_margin()) {
+        int wasted = s.frame_w() * s.frame_h() - s.art_w() * s.art_h();
+        ImGui::TextDisabled("margin: %d each side, %d top, %d bottom  (%.0f%% of cell)",
+                            s.art_off_x(), s.frame_h() - s.art_h(), 0,
+                            100.0 * wasted / (s.frame_w() * s.frame_h()));
+    } else {
+        ImGui::TextDisabled("no margin — cell fits the art exactly");
+    }
+    if (ImGui::Button("Snap to best size")) app::snap_cell(a, a.selected_sprite);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Grow the cell to the smallest tidy size that fits.\n"
+                          "Unlocks and unplaces the sprite — re-pack with Ctrl+P.");
+
+    // Manifest attributes — per source image; every frame shares them.
+    ImGui::Separator();
+    ImGui::TextUnformatted("Manifest attributes");
+    int sz[2] = {s.size_x, s.size_y};
+    if (ImGui::InputInt2("size", sz)) {
+        s.size_x = std::max(0, sz[0]);
+        s.size_y = std::max(0, sz[1]);
+        a.project_dirty = true;
+    }
+    if (!s.has_size()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(unset — omitted)");
+    }
+    int vol = s.volume;
+    if (ImGui::InputInt("volume", &vol)) {
+        s.volume = vol;
+        a.project_dirty = true;
+    }
+    char heights_buf[512]; std::snprintf(heights_buf, sizeof(heights_buf), "%s", s.heights.c_str());
+    if (ImGui::InputText("heights", heights_buf, sizeof(heights_buf))) {
+        s.heights = heights_buf;
+        a.project_dirty = true;
+    }
+    if (s.heights.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(unset — omitted)");
+    }
+
+    // shadow: pick a project shadow-mesh by name (registry lives in the
+    // project panel — deselect the sprite to edit it).
+    const char* shadow_preview = s.shadow.empty() ? "(none)" : s.shadow.c_str();
+    if (ImGui::BeginCombo("shadow", shadow_preview)) {
+        if (ImGui::Selectable("(none)", s.shadow.empty()) && !s.shadow.empty()) {
+            s.shadow.clear();
+            a.project_dirty = true;
+        }
+        for (const ShadowMesh& m : a.project.shadow_meshes) {
+            if (m.name.empty()) continue;
+            if (ImGui::Selectable(m.name.c_str(), s.shadow == m.name) && s.shadow != m.name) {
+                s.shadow = m.name;
+                a.project_dirty = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    if (s.shadow.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("(unset — omitted)");
+    } else if (std::none_of(a.project.shadow_meshes.begin(), a.project.shadow_meshes.end(),
+                            [&](const ShadowMesh& m) { return m.name == s.shadow; })) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "(no mesh entry)");
+    }
 
     if (s.frame_count() == 1) {
         bool placed = s.is_placed();
@@ -367,6 +534,33 @@ void draw_canvas(App& a) {
     ImGui::SliderFloat("Zoom", &a.canvas_zoom, 0.25f, 8.0f, "%.2fx");
     ImGui::SameLine();
     ImGui::Checkbox("Show base grid", &a.show_grid);
+
+    if (!a.project.passes.empty()) {
+        if (a.preview_pass >= (int)a.project.passes.size()) a.preview_pass = 0;
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(140.0f);
+        std::string cur = a.project.passes[a.preview_pass] + (a.preview_pass == 0 ? " (base)" : "");
+        if (ImGui::BeginCombo("Pass", cur.c_str())) {
+            for (int i = 0; i < (int)a.project.passes.size(); ++i) {
+                std::string label = a.project.passes[i] + (i == 0 ? " (base)" : "");
+                if (ImGui::Selectable(label.c_str(), i == a.preview_pass))
+                    app::set_preview_pass(a, i);
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Preview this pass's images on the canvas.\n"
+                              "Variants missing or wrong-sized show the base image tinted red.");
+        if (a.preview_pass > 0) {
+            int missing = 0;
+            for (const Sprite& s : a.project.sprites)
+                if (s.pass_missing) ++missing;
+            if (missing) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%d missing", missing);
+            }
+        }
+    }
 
     float z = a.canvas_zoom;
     // The exported sheet is sheet_w x sheet_h. The workbench is at least the
@@ -457,14 +651,21 @@ void draw_canvas(App& a) {
         Sprite& s = a.project.sprites[i];
         if (!s.texture) continue;
         int fw = s.frame_w(), fh = s.frame_h();
+        int aw = s.art_w(), ah = s.art_h();
+        int ox = s.art_off_x(), oy = s.art_off_y();
         for (int fi = 0; fi < s.frame_count(); ++fi) {
             const FramePlacement& f = s.frames[fi];
             if (f.x < 0 || f.y < 0) continue;
             ImVec2 tl(origin.x + f.x * z, origin.y + f.y * z);
             ImVec2 br(tl.x + fw * z, tl.y + fh * z);
+            // Art sits inside the cell; the gap between them is the margin.
+            ImVec2 atl(tl.x + ox * z, tl.y + oy * z);
+            ImVec2 abr(atl.x + aw * z, atl.y + ah * z);
             ImVec2 uv0((float)s.frame_src_x(fi) / s.w, (float)s.frame_src_y(fi) / s.h);
-            ImVec2 uv1((float)(s.frame_src_x(fi) + fw) / s.w, (float)(s.frame_src_y(fi) + fh) / s.h);
-            dl->AddImage(tex_id(s.texture), tl, br, uv0, uv1);
+            ImVec2 uv1((float)(s.frame_src_x(fi) + aw) / s.w, (float)(s.frame_src_y(fi) + ah) / s.h);
+            ImU32 tint = s.pass_missing ? IM_COL32(255, 90, 90, 255) : IM_COL32(255, 255, 255, 255);
+            dl->AddImage(tex_id(s.texture), atl, abr, uv0, uv1, tint);
+            if (s.has_margin()) dl->AddRect(atl, abr, IM_COL32(120, 255, 160, 90), 0.0f, 0, 1.0f);
             if (i == a.selected_sprite)
                 dl->AddRect(tl, br, IM_COL32(255, 220, 80, 255), 0.0f, 0, 2.0f);
             else if (s.locked)
@@ -550,7 +751,11 @@ void process_shortcuts(App& a) {
     if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_E, false)) app::export_manifest(a);
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A, false)) a.open_add_sprite_modal = true;
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_P, false)) app::auto_pack(a);
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_R, false)) app::report_sheet(a);
     if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Q, false)) a.quit_requested = true;
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) &&
+        a.selected_sprite >= 0 && a.selected_sprite < (int)a.project.sprites.size())
+        app::remove_sprite(a, a.selected_sprite);
 }
 
 }  // namespace

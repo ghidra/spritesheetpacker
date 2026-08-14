@@ -44,7 +44,11 @@ void export_png(const Project& project, const std::string& abs_png_path,
             pxp = si < pixel_override->size() ? (*pixel_override)[si] : nullptr;
         if (!pxp || pxp->empty()) continue;
         const std::vector<unsigned char>& pixels = *pxp;
+        // The cell is what was packed; the art is blitted at its anchor inside
+        // it, leaving the margin transparent.
         int fw = s.frame_w(), fh = s.frame_h();
+        int aw = s.art_w(), ah = s.art_h();
+        int ox = s.art_off_x(), oy = s.art_off_y();
         for (int i = 0; i < s.frame_count(); ++i) {
             const FramePlacement& f = s.frames[i];
             if (f.x < 0 || f.y < 0) continue;
@@ -52,11 +56,12 @@ void export_png(const Project& project, const std::string& abs_png_path,
                 throw std::runtime_error(s.frame_id(i) +
                                          ": rectangle exceeds sheet bounds during export");
             int sx = s.frame_src_x(i), sy = s.frame_src_y(i);
-            for (int row = 0; row < fh; ++row) {
+            for (int row = 0; row < ah; ++row) {
                 const unsigned char* src_row =
                     &pixels[(((size_t)(sy + row) * (size_t)s.w) + sx) * 4];
-                unsigned char* dst_row = &buf[((size_t)(f.y + row) * (size_t)W + f.x) * 4];
-                for (int col = 0; col < fw; ++col)
+                unsigned char* dst_row =
+                    &buf[((size_t)(f.y + oy + row) * (size_t)W + f.x + ox) * 4];
+                for (int col = 0; col < aw; ++col)
                     blend_pixel(dst_row + col * 4, src_row + col * 4);
             }
         }

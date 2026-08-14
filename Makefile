@@ -21,6 +21,8 @@ APP_SRC  = src/main.cpp \
            src/project.cpp \
            src/packer.cpp \
            src/validation.cpp \
+           src/report.cpp \
+           src/sizes.cpp \
            src/exporter.cpp \
            src/ui.cpp \
            src/stb_impl.cpp

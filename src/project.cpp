@@ -147,6 +147,9 @@ Project load(const std::string& path) {
     if (j.contains("passes") && j["passes"].is_array())
         for (const auto& e : j["passes"])
             if (e.is_string()) p.passes.push_back(e.get<std::string>());
+    if (j.contains("shadowMeshes") && j["shadowMeshes"].is_object())
+        for (const auto& [k, v] : j["shadowMeshes"].items())
+            if (v.is_string()) p.shadow_meshes.push_back({k, v.get<std::string>()});
 
     if (j.contains("sprites") && j["sprites"].is_array()) {
         for (const auto& e : j["sprites"]) {
@@ -157,6 +160,8 @@ Project load(const std::string& path) {
             s.frame_rows = e.value("frameRows", 1);
             if (s.frame_cols < 1) s.frame_cols = 1;
             if (s.frame_rows < 1) s.frame_rows = 1;
+            s.cell_w = e.value("cellW", 0);
+            s.cell_h = e.value("cellH", 0);
             s.ensure_frames();
             if (s.frame_count() == 1) {
                 if (e.contains("x") && !e["x"].is_null()) s.frames[0].x = e["x"].get<int>();
@@ -171,6 +176,13 @@ Project load(const std::string& path) {
                 }
             }
             s.locked = e.value("locked", s.is_placed());
+            if (e.contains("size") && e["size"].is_array() && e["size"].size() == 2) {
+                s.size_x = e["size"][0].get<int>();
+                s.size_y = e["size"][1].get<int>();
+            }
+            s.volume = e.value("volume", 1);
+            s.shadow = e.value("shadow", std::string());
+            s.heights = e.value("heights", std::string());
             p.sprites.push_back(std::move(s));
         }
     }
@@ -190,6 +202,11 @@ void save(const std::string& path, const Project& project) {
     if (project.width_fit == SheetFit::Manual) j["manualWidth"] = project.manual_width;
     if (project.height_fit == SheetFit::Manual) j["manualHeight"] = project.manual_height;
     if (!project.passes.empty()) j["passes"] = project.passes;
+    if (!project.shadow_meshes.empty()) {
+        json sm = json::object();
+        for (const ShadowMesh& m : project.shadow_meshes) sm[m.name] = m.path;
+        j["shadowMeshes"] = sm;
+    }
     j["sprites"] = json::array();
     for (const Sprite& s : project.sprites) {
         json e;
@@ -197,6 +214,8 @@ void save(const std::string& path, const Project& project) {
         e["src"] = s.src;
         if (s.frame_cols != 1) e["frameCols"] = s.frame_cols;
         if (s.frame_rows != 1) e["frameRows"] = s.frame_rows;
+        if (s.cell_w > 0) e["cellW"] = s.cell_w;
+        if (s.cell_h > 0) e["cellH"] = s.cell_h;
         if (s.frame_count() == 1) {
             if (s.frames[0].x >= 0 && s.frames[0].y >= 0) {
                 e["x"] = s.frames[0].x;
@@ -208,6 +227,10 @@ void save(const std::string& path, const Project& project) {
             e["frames"] = arr;
         }
         if (s.locked && s.is_placed()) e["locked"] = true;
+        if (s.has_size()) e["size"] = {s.size_x, s.size_y};
+        if (s.volume != 1) e["volume"] = s.volume;
+        if (!s.shadow.empty()) e["shadow"] = s.shadow;
+        if (!s.heights.empty()) e["heights"] = s.heights;
         j["sprites"].push_back(e);
     }
     fs::create_directories(fs::path(path).parent_path());
@@ -233,15 +256,14 @@ void save_manifest(const std::string& path, const Project& project) {
             image_paths.push_back(rel_to_manifest(output_for_pass(project.output_rel, p)));
     }
 
-    struct Piece { std::string id; int x, y, w, h, cols, rows; };
-    int unit = project.base_unit > 0 ? project.base_unit : 1;
+    struct Piece { std::string id; int x, y, w, h; const Sprite* sp; };
     std::vector<Piece> pieces;
     for (const Sprite& s : project.sprites) {
         int fw = s.frame_w(), fh = s.frame_h();
         for (int i = 0; i < s.frame_count(); ++i) {
             const FramePlacement& f = s.frames[i];
             if (f.x < 0 || f.y < 0) continue;
-            pieces.push_back({s.frame_id(i), f.x, f.y, fw, fh, fw / unit, fh / unit});
+            pieces.push_back({s.frame_id(i), f.x, f.y, fw, fh, &s});
         }
     }
 
@@ -271,12 +293,36 @@ void save_manifest(const std::string& path, const Project& project) {
     }
     out << "    ],\n";
 
+    // Only meshes actually referenced by an exported piece, in registry order.
+    std::vector<const ShadowMesh*> used_meshes;
+    for (const ShadowMesh& m : project.shadow_meshes) {
+        if (m.name.empty()) continue;
+        if (std::any_of(pieces.begin(), pieces.end(),
+                        [&](const Piece& pc) { return pc.sp->shadow == m.name; }))
+            used_meshes.push_back(&m);
+    }
+    if (!used_meshes.empty()) {
+        out << "    \"shadowMeshes\": {\n";
+        for (size_t i = 0; i < used_meshes.size(); ++i) {
+            out << "      " << str(used_meshes[i]->name) << ": " << str(used_meshes[i]->path)
+                << (i + 1 < used_meshes.size() ? "," : "") << "\n";
+        }
+        out << "    },\n";
+    }
+
     out << "    \"pieces\": {\n";
     for (size_t i = 0; i < pieces.size(); ++i) {
         const Piece& p = pieces[i];
         out << "      " << str(p.id) << ": {\n";
         out << "        \"rect\": [" << p.x << ", " << p.y << ", " << p.w << ", " << p.h << "],\n";
-        out << "        \"size\": [" << p.cols << ", " << p.rows << "]\n";
+        if (p.sp->has_size())
+            out << "        \"size\": [" << p.sp->size_x << ", " << p.sp->size_y << "],\n";
+        out << "        \"volume\": " << p.sp->volume;
+        if (!p.sp->heights.empty())
+            out << ",\n        \"heights\": " << str(p.sp->heights);
+        if (!p.sp->shadow.empty())
+            out << ",\n        \"shadow\": " << str(p.sp->shadow);
+        out << "\n";
         out << "      }" << (i + 1 < pieces.size() ? "," : "") << "\n";
     }
     out << "    }\n";
@@ -293,7 +339,7 @@ void hydrate(Project& project, const std::string& project_path, SDL_Renderer* re
             throw std::runtime_error(s.id + ": " + s.load_error);
         validation::validate_frame_grid(s.id, s.w, s.h, s.frame_cols, s.frame_rows);
         s.ensure_frames();
-        validation::validate_dimensions(s.id, s.frame_w(), s.frame_h(), project.base_unit, warnings);
+        validation::validate_dimensions(s.id, s.art_w(), s.art_h(), project.base_unit, warnings);
         for (int i = 0; i < s.frame_count(); ++i) {
             const FramePlacement& f = s.frames[i];
             if (f.x >= 0 && f.y >= 0)

@@ -25,6 +25,7 @@ struct App {
     // UI state
     float canvas_zoom = 2.0f;
     int   selected_sprite = -1;   // index into project.sprites
+    int   preview_pass = 0;       // index into project.passes shown on canvas; 0 = base
     std::vector<AppMessage> messages;
     bool  show_grid = true;
     int   left_column_width = 400;
@@ -67,6 +68,25 @@ void remove_sprite(App& a, int index);
 // Run packer for any sprites without locked positions. Updates project + dims.
 bool auto_pack(App& a);
 
+// Set a sprite's packing cell (0 = fit the art exactly). Values below the art
+// size are clamped up — a cell never crops. Changing the cell unlocks and
+// unplaces the sprite: its old position is almost certainly not a multiple of
+// the new cell, which project::hydrate rejects on the next load.
+void set_cell(App& a, int index, int cell_w, int cell_h);
+
+// Grow a sprite's cell to the smallest tidy size that fits its art. Already
+// tidy art is left alone. `snap_all_cells` does it for every sprite and logs
+// how much margin it cost.
+void snap_cell(App& a, int index);
+void snap_all_cells(App& a);
+
+// Swap displayed sprite textures to the given pass (index into project.passes,
+// 0 = base). Display-only: sprite.pixels keeps the base pass for export.
+// Missing/wrong-sized variants fall back to the tinted base texture
+// (sprite.pass_missing) and are logged. Returns true if every variant loaded —
+// i.e. the pass is complete and safe to export.
+bool set_preview_pass(App& a, int pass_index);
+
 // Export PNG + manifest using paths from project, resolved relative to project_path.
 bool export_all(App& a);
 
@@ -76,5 +96,8 @@ bool export_manifest(App& a);
 
 // Refresh sheet dims based on currently placed sprites (no packing).
 void recompute_sheet_dims(App& a);
+
+// Audit sheet usage and the fit rules, writing the result to the message log.
+void report_sheet(App& a);
 
 }  // namespace app

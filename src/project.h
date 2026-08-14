@@ -11,6 +11,14 @@
 //  Manual - use an explicit value (clamped to at least the content extent)
 enum class SheetFit { Shared, Tight, Manual };
 
+// Named shadow-mesh entry, e.g. "palmtree1" -> "src/scenes/blob/palmtree1_mesh.json".
+// Sprites reference the name via their `shadow` attribute. The path is written
+// to the manifest verbatim (no relativizing — it's a consumer-side path).
+struct ShadowMesh {
+    std::string name;
+    std::string path;
+};
+
 struct Project {
     int version = 1;
     int base_unit = 32;
@@ -28,6 +36,8 @@ struct Project {
     // pass whose images are loaded for display/packing and stored in sprite.src.
     // Empty = single-pass export using sprite.src and output as-is.
     std::vector<std::string> passes;
+
+    std::vector<ShadowMesh> shadow_meshes;
 
     std::vector<Sprite> sprites;
 
